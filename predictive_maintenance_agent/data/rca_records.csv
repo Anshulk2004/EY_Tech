@@ -1,0 +1,2 @@
+rca_id,part_number,part_name,failure_mode,root_cause,corrective_action_plan
+RCA-112,BCM-45-A2,Brake Master Cylinder,Internal Seal Degradation,Material impurity from supplier batch #XYZ,Recall batch #XYZ

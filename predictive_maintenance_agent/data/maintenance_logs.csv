@@ -1,0 +1,4 @@
+record_id,vehicle_id,service_date,description,dtc_code_at_service
+1,veh_003,2025-05-10,Annual Service,
+2,veh_007,2025-01-20,Tire rotation,
+3,veh_009,2025-07-30,Replaced brake master cylinder,C0204

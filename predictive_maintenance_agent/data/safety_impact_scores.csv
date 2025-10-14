@@ -1,0 +1,9 @@
+component,safety_impact_score
+Brakes,10
+Engine,9
+Transmission,8
+Steering,9
+Suspension,7
+Tires,8
+AC System,3
+Infotainment,1
