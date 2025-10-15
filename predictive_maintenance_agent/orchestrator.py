@@ -23,6 +23,7 @@ class WorkflowState(TypedDict):
     drps_score: int
     xai_explanation: str
     customer_response: str
+    customer_name: str 
     appointment_slot: str
     booking_status: str
     final_insight: str
@@ -49,6 +50,8 @@ def ueba_security_wrapper(agent_name, tool_name, func, *args, **kwargs):
 
 # --- 3. Tools Definition ---
 # These are the functions our agents can call
+
+
 
 def analyze_telemetry_data():
     """Reads telemetry data and finds the first vehicle with an anomaly."""
@@ -95,13 +98,32 @@ def get_diagnosis_and_drps(vehicle_id, anomaly, llm):
     
     return predicted_component, drps
 
-def generate_xai_customer_message(anomaly, diagnosis, llm):
-    """Generates a trust-building, explainable message for the customer."""
+def generate_xai_customer_message(customer_name, drps_score, anomaly_data, diagnosis, llm):
+    """Generates a more persuasive, human-like message for the customer."""
+    
+    # Determine the tone based on urgency
+    urgency_level = "It's important we look at this soon to ensure your safety and prevent a breakdown."
+    if drps_score < 75:
+        urgency_level = "This is a non-urgent recommendation to keep your car in top shape."
+
     prompt = f"""
-    You are a helpful AI car assistant. Explain the following issue to a non-technical owner to build trust.
-    Diagnosis: {diagnosis}
-    Evidence: Brake pressure dropped to {anomaly['brake_fluid_pressure_psi']:.2f} psi (Normal is > 550 psi) and pad thickness is low at {anomaly['brake_pad_thickness_mm']:.2f}mm.
-    Generate a 2-3 sentence explanation starting with "Here's why we're recommending a check-up:".
+    You are a friendly and professional AI assistant for an automotive service center. Your name is 'AutoMate'.
+    Your goal is to call a customer, explain a potential vehicle issue clearly and calmly, and convince them to book a free inspection.
+
+    **Customer Name:** {customer_name}
+    **Diagnosis:** A potential issue with the vehicle's **{diagnosis}**.
+    **Key Evidence:**
+    - Brake pressure has dropped to {anomaly_data['brake_fluid_pressure_psi']:.2f} psi (Normal is > 550 psi).
+    - Brake pad thickness is low at {anomaly_data['brake_pad_thickness_mm']:.2f}mm.
+
+    Generate a natural, human-like voice script for the call. It should:
+    1. Greet the customer by name.
+    2. Introduce yourself (AutoMate).
+    3. State the reason for the call in a non-alarming way.
+    4. Provide the simple, clear evidence (the "why").
+    5. State the benefit of acting now (the urgency level).
+    6. Make a clear, easy call to action: offer to schedule a complimentary inspection.
+    7. End by asking a direct question, like "Would you like me to find a time that works for you?"
     """
     return llm.invoke(prompt).content
 
@@ -117,13 +139,22 @@ def book_appointment(vehicle_id, slot):
     return response.json()
 
 def perform_rca_and_update_score(vehicle_id, llm):
-    """Performs Root Cause Analysis and updates customer health score."""
-    # RCA (simplified)
-    rca_df = pd.read_csv('data/rca_records.csv')
-    insight = f"Failure linked to {rca_df['rca_id'].iloc[0]} due to {rca_df['root_cause'].iloc[0]}"
+    """Performs Root Cause Analysis, tracks recurrence, and updates customer health score."""
     
-    # Update score
+    # --- Load all necessary data ---
+    rca_df = pd.read_csv('data/rca_records.csv')
+    maintenance_df = pd.read_csv('data/maintenance_logs.csv')
     customers_df = pd.read_csv('data/customer_profiles.csv')
+
+    # --- NEW LOGIC for tracking recurring defects ---
+    # Count how many times this specific failure code has previously occurred across the fleet
+    recurrence_count = maintenance_df[maintenance_df['dtc_code_at_service'] == 'C0204'].shape[0]
+
+    # --- ENHANCED INSIGHT based on recurrence ---
+    # The "+ 1" includes the current failure we are processing
+    insight = f"Failure linked to {rca_df['rca_id'].iloc[0]}. This is the **{recurrence_count + 1}th instance** of this defect recorded across the fleet. Recommend escalating for quality review."
+    
+    # --- Update customer health score ---
     current_score = customers_df.loc[customers_df['vehicle_id'] == vehicle_id, 'health_score'].iloc[0]
     new_score = current_score + 50
     customers_df.loc[customers_df['vehicle_id'] == vehicle_id, 'health_score'] = new_score
@@ -139,17 +170,23 @@ def data_analysis_node(state: WorkflowState):
     print("--- 🕵️‍♂️ DATA ANALYSIS AGENT ---")
     anomaly_dict = ueba_security_wrapper('DataAnalysisAgent', 'read_csv', analyze_telemetry_data)
     
-    # Store the raw dictionary
-    state['anomaly_data'] = anomaly_dict # <-- ADD THIS
-    
-    # Store the descriptive string for logging
+    # --- FIX THE ORDER HERE ---
+    # 1. First, load the customer data from the CSV file.
+    customer_df = pd.read_csv('data/customer_profiles.csv')
+
+    # 2. Now that customer_df exists, you can safely use it.
     state['vehicle_id'] = anomaly_dict['vehicle_id']
+    state['customer_id'] = customer_df[customer_df['vehicle_id'] == state['vehicle_id']]['customer_id'].iloc[0]
+    state['customer_name'] = customer_df[customer_df['vehicle_id'] == state['vehicle_id']]['customer_name'].iloc[0]
+    
+    # Store the other details
+    state['anomaly_data'] = anomaly_dict
     state['anomaly_details'] = f"Low pressure ({anomaly_dict['brake_fluid_pressure_psi']:.2f} psi) & thickness ({anomaly_dict['brake_pad_thickness_mm']:.2f}mm)"
     
-    customer_df = pd.read_csv('data/customer_profiles.csv')
-    state['customer_id'] = customer_df[customer_df['vehicle_id'] == state['vehicle_id']]['customer_id'].iloc[0]
     print(f"Anomaly detected for {state['vehicle_id']}: {state['anomaly_details']}")
     return state
+
+
 
 # In orchestrator.py, inside diagnosis_node
 def diagnosis_node(state: WorkflowState):
@@ -170,8 +207,10 @@ def customer_engagement_node(state: WorkflowState):
         'CustomerEngagementAgent', 
         'llm_invoke', 
         generate_xai_customer_message, 
-        state['anomaly_data'],  # <-- CHANGE 'anomaly_details' to 'anomaly_data'
-        state['diagnosis'], 
+        state['customer_name'], # Pass the name
+        state['drps_score'],    # Pass the score for urgency
+        state['anomaly_data'],
+        state['diagnosis'],  
         llm
     )
 
@@ -202,6 +241,28 @@ def scheduling_node(state: WorkflowState):
     print(f"Booking status: {state['booking_status']}")
     return state
 
+def handle_declined_node(state: WorkflowState):
+    print("--- 😔 CUSTOMER DECLINED ---")
+    print("Action: Logging interaction. Will schedule a follow-up reminder in 3 days.")
+    # In a real system, you'd add this to a separate reminder queue.
+    state['booking_status'] = 'Declined - Follow-up Scheduled'
+    return state
+
+# 2. Add a conditional function to decide the next step
+def should_schedule(state: WorkflowState):
+    """Determines whether to schedule an appointment or handle a decline."""
+    print("--- 🤔 DECISION POINT ---")
+    # Simulate customer response based on urgency for the demo
+    # A high DRPS means the customer is more likely to agree
+    if state['drps_score'] > 80:
+        print("Customer agreed to schedule.")
+        state['customer_response'] = 'yes'
+        return "continue_to_scheduling"
+    else:
+        print("Customer declined scheduling for now.")
+        state['customer_response'] = 'no'
+        return "handle_decline"
+
 def feedback_and_insight_node(state: WorkflowState):
     print("--- 📈 FEEDBACK & INSIGHT AGENT ---")
     insight, new_score = ueba_security_wrapper('FeedbackAgent', 'read_csv', perform_rca_and_update_score, state['vehicle_id'], llm)
@@ -217,15 +278,24 @@ workflow.add_node("data_analysis", data_analysis_node)
 workflow.add_node("diagnosis", diagnosis_node)
 workflow.add_node("customer_engagement", customer_engagement_node)
 workflow.add_node("scheduling", scheduling_node)
+workflow.add_node("handle_decline", handle_declined_node)
 workflow.add_node("feedback_and_insight", feedback_and_insight_node)
 
 # --- 6. Graph Edges ---
 workflow.set_entry_point("data_analysis")
 workflow.add_edge("data_analysis", "diagnosis")
 workflow.add_edge("diagnosis", "customer_engagement")
-workflow.add_edge("customer_engagement", "scheduling")
+workflow.add_conditional_edges(
+    "customer_engagement",
+    should_schedule,
+    {
+        "continue_to_scheduling": "scheduling",
+        "handle_decline": "handle_decline"
+    }
+)
 workflow.add_edge("scheduling", "feedback_and_insight")
 workflow.add_edge("feedback_and_insight", END)
+workflow.add_edge("handle_decline", END)
 
 # --- 7. Compile and Run ---
 app = workflow.compile()

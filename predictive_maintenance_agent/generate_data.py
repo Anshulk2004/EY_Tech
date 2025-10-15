@@ -57,10 +57,12 @@ pd.DataFrame(rca).to_csv('data/rca_records.csv', index=False)
 print("Generating: customer_profiles.csv")
 profiles = []
 styles = ['City', 'Highway', 'Mixed']
+names = ["Priya", "Rohan", "Anjali", "Vikram", "Sonia", "Amit", "Neha", "Karan", "Meera", "Arjun"]
 for i in range(1, vehicles + 1):
     profiles.append({
         'vehicle_id': f'veh_{i:03d}',
         'customer_id': f'cust_{100+i}',
+        'customer_name': names[i-1], # <-- ADD THIS LINE
         'driving_style': random.choice(styles),
         'avg_daily_km': random.randint(30, 150),
         'health_score': random.randint(750, 950)
